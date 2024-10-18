@@ -3,7 +3,7 @@
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 # All rights reserved.
 #
-# This software is free for non-commercial, research and evaluation use 
+# This software is free for non-commercial, research and evaluation use
 # under the terms of the LICENSE.md file.
 #
 # For inquiries contact  george.drettakis@inria.fr
@@ -12,10 +12,19 @@
 import os
 import sys
 from PIL import Image
+import pillow_avif  # noqa
 from typing import NamedTuple, Optional
 from tqdm import tqdm
-from scene.colmap_loader import read_extrinsics_text, read_intrinsics_text, qvec2rotmat, \
-    read_extrinsics_binary, read_intrinsics_binary, read_points3D_binary, read_points3D_text
+import trimesh
+from scene.colmap_loader import (
+    read_extrinsics_text,
+    read_intrinsics_text,
+    qvec2rotmat,
+    read_extrinsics_binary,
+    read_intrinsics_binary,
+    read_points3D_binary,
+    read_points3D_text,
+)
 from utils.graphics_utils import getWorld2View2, focal2fov, fov2focal
 import numpy as np
 import json
@@ -23,6 +32,13 @@ from pathlib import Path
 from plyfile import PlyData, PlyElement
 from utils.sh_utils import SH2RGB
 from scene.gaussian_model import BasicPointCloud
+
+
+def linear2srgb(img: np.ndarray, gamma: float = 2.4) -> np.ndarray:
+    linear_part = img * 12.92
+    exp_part = 1.055 * (np.maximum(img, 0.0031308) ** (1 / gamma)) - 0.055
+    return np.where(img <= 0.0031308, linear_part, exp_part)
+
 
 class CameraInfo(NamedTuple):
     uid: int
@@ -38,6 +54,8 @@ class CameraInfo(NamedTuple):
     bg: np.array = np.array([0, 0, 0])
     timestep: Optional[int] = None
     camera_id: Optional[int] = None
+    K: Optional[np.array] = None
+
 
 class SceneInfo(NamedTuple):
     train_cameras: list
@@ -50,6 +68,7 @@ class SceneInfo(NamedTuple):
     test_meshes: dict = {}
     tgt_train_meshes: dict = {}
     tgt_test_meshes: dict = {}
+
 
 def getNerfppNorm(cam_info):
     def get_center_and_diag(cam_centers):
@@ -74,12 +93,13 @@ def getNerfppNorm(cam_info):
 
     return {"translate": translate, "radius": radius}
 
+
 def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
     cam_infos = []
     for idx, key in enumerate(cam_extrinsics):
-        sys.stdout.write('\r')
+        sys.stdout.write("\r")
         # the exact output you're looking for:
-        sys.stdout.write("Reading camera {}/{}".format(idx+1, len(cam_extrinsics)))
+        sys.stdout.write("Reading camera {}/{}".format(idx + 1, len(cam_extrinsics)))
         sys.stdout.flush()
 
         extr = cam_extrinsics[key]
@@ -91,11 +111,11 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
         R = np.transpose(qvec2rotmat(extr.qvec))
         T = np.array(extr.tvec)
 
-        if intr.model=="SIMPLE_PINHOLE":
+        if intr.model == "SIMPLE_PINHOLE":
             focal_length_x = intr.params[0]
             FovY = focal2fov(focal_length_x, height)
             FovX = focal2fov(focal_length_x, width)
-        elif intr.model=="PINHOLE":
+        elif intr.model == "PINHOLE":
             focal_length_x = intr.params[0]
             focal_length_y = intr.params[1]
             FovY = focal2fov(focal_length_y, height)
@@ -108,26 +128,46 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
         image = Image.open(image_path)
         width, height = image.size
 
-        cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
-                              image_path=image_path, image_name=image_name, width=width, height=height)
+        cam_info = CameraInfo(
+            uid=uid,
+            R=R,
+            T=T,
+            FovY=FovY,
+            FovX=FovX,
+            image=image,
+            image_path=image_path,
+            image_name=image_name,
+            width=width,
+            height=height,
+        )
         cam_infos.append(cam_info)
-    sys.stdout.write('\n')
+    sys.stdout.write("\n")
     return cam_infos
+
 
 def fetchPly(path):
     plydata = PlyData.read(path)
-    vertices = plydata['vertex']
-    positions = np.vstack([vertices['x'], vertices['y'], vertices['z']]).T
-    colors = np.vstack([vertices['red'], vertices['green'], vertices['blue']]).T / 255.0
-    normals = np.vstack([vertices['nx'], vertices['ny'], vertices['nz']]).T
+    vertices = plydata["vertex"]
+    positions = np.vstack([vertices["x"], vertices["y"], vertices["z"]]).T
+    colors = np.vstack([vertices["red"], vertices["green"], vertices["blue"]]).T / 255.0
+    normals = np.vstack([vertices["nx"], vertices["ny"], vertices["nz"]]).T
     return BasicPointCloud(points=positions, colors=colors, normals=normals)
+
 
 def storePly(path, xyz, rgb):
     # Define the dtype for the structured array
-    dtype = [('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
-            ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),
-            ('red', 'u1'), ('green', 'u1'), ('blue', 'u1')]
-    
+    dtype = [
+        ("x", "f4"),
+        ("y", "f4"),
+        ("z", "f4"),
+        ("nx", "f4"),
+        ("ny", "f4"),
+        ("nz", "f4"),
+        ("red", "u1"),
+        ("green", "u1"),
+        ("blue", "u1"),
+    ]
+
     normals = np.zeros_like(xyz)
 
     elements = np.empty(xyz.shape[0], dtype=dtype)
@@ -135,9 +175,10 @@ def storePly(path, xyz, rgb):
     elements[:] = list(map(tuple, attributes))
 
     # Create the PlyData object and write to file
-    vertex_element = PlyElement.describe(elements, 'vertex')
+    vertex_element = PlyElement.describe(elements, "vertex")
     ply_data = PlyData([vertex_element])
     ply_data.write(path)
+
 
 def readColmapSceneInfo(path, images, eval, llffhold=8):
     try:
@@ -152,8 +193,12 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
     reading_dir = "images" if images == None else images
-    cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir))
-    cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
+    cam_infos_unsorted = readColmapCameras(
+        cam_extrinsics=cam_extrinsics,
+        cam_intrinsics=cam_intrinsics,
+        images_folder=os.path.join(path, reading_dir),
+    )
+    cam_infos = sorted(cam_infos_unsorted.copy(), key=lambda x: x.image_name)
 
     if eval:
         train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
@@ -168,7 +213,9 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
     bin_path = os.path.join(path, "sparse/0/points3D.bin")
     txt_path = os.path.join(path, "sparse/0/points3D.txt")
     if not os.path.exists(ply_path):
-        print("Converting point3d.bin to .ply, will happen only the first time you open the scene.")
+        print(
+            "Converting point3d.bin to .ply, will happen only the first time you open the scene."
+        )
         try:
             xyz, rgb, _ = read_points3D_binary(bin_path)
         except:
@@ -179,19 +226,22 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
     except:
         pcd = None
 
-    scene_info = SceneInfo(point_cloud=pcd,
-                           train_cameras=train_cam_infos,
-                           test_cameras=test_cam_infos,
-                           nerf_normalization=nerf_normalization,
-                           ply_path=ply_path)
+    scene_info = SceneInfo(
+        point_cloud=pcd,
+        train_cameras=train_cam_infos,
+        test_cameras=test_cam_infos,
+        nerf_normalization=nerf_normalization,
+        ply_path=ply_path,
+    )
     return scene_info
+
 
 def readCamerasFromTransforms(path, transformsfile, white_background, extension=".png"):
     cam_infos = []
 
     with open(os.path.join(path, transformsfile)) as json_file:
         contents = json.load(json_file)
-        if 'camera_angle_x' in contents:
+        if "camera_angle_x" in contents:
             fovx_shared = contents["camera_angle_x"]
 
         frames = contents["frames"]
@@ -203,53 +253,141 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
 
             # NeRF 'transform_matrix' is a camera-to-world transform
             c2w = np.array(frame["transform_matrix"])
-            # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
+            # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP/OpenCV (Y down, Z forward)
             c2w[:3, 1:3] *= -1
 
             # get the world-to-camera transform and set R, T
             w2c = np.linalg.inv(c2w)
-            R = np.transpose(w2c[:3,:3])  # R is stored transposed due to 'glm' in CUDA code
+            R = np.transpose(
+                w2c[:3, :3]
+            )  # R is stored transposed due to 'glm' in CUDA code
             T = w2c[:3, 3]
 
-            bg = np.array([1,1,1]) if white_background else np.array([0, 0, 0])
+            bg = np.array([1, 1, 1]) if white_background else np.array([0, 0, 0])
 
             image_path = os.path.join(path, cam_name)
             image_name = Path(cam_name).stem
-            
-            if 'w' in frame and 'h' in frame:
+
+            if "w" in frame and "h" in frame:
                 image = None
-                width = frame['w']
-                height = frame['h']
+                width = frame["w"]
+                height = frame["h"]
             else:
                 image = Image.open(image_path)
                 im_data = np.array(image.convert("RGBA"))
                 norm_data = im_data / 255.0
-                arr = norm_data[:,:,:3] * norm_data[:, :, 3:4] + bg * (1 - norm_data[:, :, 3:4])
-                image = Image.fromarray(np.array(arr*255.0, dtype=np.byte), "RGB")
+                arr = norm_data[:, :, :3] * norm_data[:, :, 3:4] + bg * (
+                    1 - norm_data[:, :, 3:4]
+                )
+                image = Image.fromarray(np.array(arr * 255.0, dtype=np.byte), "RGB")
                 width, height = image.size
 
-            if 'camera_angle_x' in frame:
+            if "camera_angle_x" in frame:
                 fovx = frame["camera_angle_x"]
             else:
                 fovx = fovx_shared
             fovy = focal2fov(fov2focal(fovx, width), height)
 
-            timestep = frame["timestep_index"] if 'timestep_index' in frame else None
-            camera_id = frame["camera_index"] if 'camera_id' in frame else None
-            
-            cam_infos.append(CameraInfo(
-                uid=idx, R=R, T=T, FovY=fovy, FovX=fovx, bg=bg, image=image, 
-                image_path=image_path, image_name=image_name, 
-                width=width, height=height, 
-                timestep=timestep, camera_id=camera_id))
+            timestep = frame["timestep_index"] if "timestep_index" in frame else None
+            camera_id = frame["camera_index"] if "camera_id" in frame else None
+
+            cam_infos.append(
+                CameraInfo(
+                    uid=idx,
+                    R=R,
+                    T=T,
+                    FovY=fovy,
+                    FovX=fovx,
+                    bg=bg,
+                    image=image,
+                    image_path=image_path,
+                    image_name=image_name,
+                    width=width,
+                    height=height,
+                    timestep=timestep,
+                    camera_id=camera_id,
+                )
+            )
     return cam_infos
+
+
+def read_goliath_camera_info(path, transformsfile, white_background, extension=".avif"):
+    cam_info = []
+
+    with open(os.path.join(path, transformsfile)) as json_file:
+        contents = json.load(json_file)
+
+        frames = contents
+
+        for idx, frame in tqdm(enumerate(frames), total=len(frames)):
+            file_path = frame["image_path"]
+            cam_name = os.path.join(path, file_path)
+
+            w2c = np.array(frame["world_to_cam"])  # Already on OpenCV/COLMAP format
+            w2c[:3, 3] *= 0.001  # Convert to meters
+            R = np.transpose(
+                w2c[:3, :3]
+            )  # R is stored transposed due to 'glm' in CUDA code
+            T = w2c[:3, 3]
+
+            bg = np.array([0, 0, 0])
+
+            image_path = os.path.join(path, cam_name)
+            image_name = Path(cam_name).stem
+
+            image = Image.open(image_path)
+            arr = linear2srgb(np.array(image) / 255.0)
+            image = Image.fromarray((arr * 255.0).astype(np.uint8), "RGB")
+            width, height = image.size
+
+            fovx = frame["fov_x"] * 2
+            fovy = frame["fov_y"] * 2
+            fx = fov2focal(fovx, width)
+            fy = fov2focal(fovy, height)
+
+            K = np.array(
+                [
+                    [fx, 0, width / 2],
+                    [0, fy, height / 2],
+                    [0, 0, 1],
+                ]
+            )
+
+            timestep = frame["timestep_index"] if "timestep_index" in frame else None
+            camera_id = frame["camera_index"] if "camera_id" in frame else None
+
+            cam_info.append(
+                CameraInfo(
+                    uid=idx,
+                    R=R,
+                    T=T,
+                    FovY=fovy,
+                    FovX=fovx,
+                    bg=bg,
+                    image=image,
+                    image_path=image_path,
+                    image_name=image_name,
+                    width=width,
+                    height=height,
+                    timestep=timestep,
+                    camera_id=camera_id,
+                    K=K,
+                )
+            )
+
+    return cam_info
+
 
 def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
     print("Reading Training Transforms")
-    train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension)
+    train_cam_infos = readCamerasFromTransforms(
+        path, "transforms_train.json", white_background, extension
+    )
     print("Reading Test Transforms")
-    test_cam_infos = readCamerasFromTransforms(path, "transforms_test.json", white_background, extension)
-    
+    test_cam_infos = readCamerasFromTransforms(
+        path, "transforms_test.json", white_background, extension
+    )
+
     if not eval:
         train_cam_infos.extend(test_cam_infos)
         test_cam_infos = []
@@ -261,11 +399,13 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
         # Since this data set has no colmap data, we start with random points
         num_pts = 100_000
         print(f"Generating random point cloud ({num_pts})...")
-        
+
         # We create random points inside the bounds of the synthetic Blender scenes
         xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
         shs = np.random.random((num_pts, 3)) / 255.0
-        pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
+        pcd = BasicPointCloud(
+            points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3))
+        )
 
         storePly(ply_path, xyz, SH2RGB(shs) * 255)
     try:
@@ -273,62 +413,103 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
     except:
         pcd = None
 
-    scene_info = SceneInfo(point_cloud=pcd,
-                           train_cameras=train_cam_infos,
-                           test_cameras=test_cam_infos,
-                           nerf_normalization=nerf_normalization,
-                           ply_path=ply_path)
+    scene_info = SceneInfo(
+        point_cloud=pcd,
+        train_cameras=train_cam_infos,
+        test_cameras=test_cam_infos,
+        nerf_normalization=nerf_normalization,
+        ply_path=ply_path,
+    )
     return scene_info
+
 
 def readMeshesFromTransforms(path, transformsfile):
     with open(os.path.join(path, transformsfile)) as json_file:
         contents = json.load(json_file)
         frames = contents["frames"]
-        
+
         mesh_infos = {}
         for idx, frame in tqdm(enumerate(frames), total=len(frames)):
-            if not 'timestep_index' in frame or frame["timestep_index"] in mesh_infos:
+            if not "timestep_index" in frame or frame["timestep_index"] in mesh_infos:
                 continue
 
-            flame_param = dict(np.load(os.path.join(path, frame['flame_param_path']), allow_pickle=True))
+            flame_param = dict(
+                np.load(
+                    os.path.join(path, frame["flame_param_path"]), allow_pickle=True
+                )
+            )
             mesh_infos[frame["timestep_index"]] = flame_param
     return mesh_infos
+
+
+def read_vertices_from_goliath(path, transformsfile):
+    with open(os.path.join(path, transformsfile)) as json_file:
+        contents = json.load(json_file)
+        frames = contents
+
+        meshes = {}
+        for idx, frame in tqdm(enumerate(frames), total=len(frames)):
+            if "timestep_index" not in frame or frame["timestep_index"] in meshes:
+                continue
+
+            meshes[frame["timestep_index"]] = (
+                trimesh.load(os.path.join(path, frame["vertex_path"])).vertices * 0.001
+            )  # [V, 3]
+
+    return meshes
+
 
 def readDynamicNerfInfo(path, white_background, eval, extension=".png", target_path=""):
     print("Reading Training Transforms")
     if target_path != "":
-        train_cam_infos = readCamerasFromTransforms(target_path, "transforms_train.json", white_background, extension)
+        train_cam_infos = readCamerasFromTransforms(
+            target_path, "transforms_train.json", white_background, extension
+        )
     else:
-        train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension)
-    
+        train_cam_infos = readCamerasFromTransforms(
+            path, "transforms_train.json", white_background, extension
+        )
+
     print("Reading Training Meshes")
     train_mesh_infos = readMeshesFromTransforms(path, "transforms_train.json")
     if target_path != "":
         print("Reading Target Meshes (Training Division)")
-        tgt_train_mesh_infos = readMeshesFromTransforms(target_path, "transforms_train.json")
+        tgt_train_mesh_infos = readMeshesFromTransforms(
+            target_path, "transforms_train.json"
+        )
     else:
         tgt_train_mesh_infos = {}
-    
+
     print("Reading Validation Transforms")
     if target_path != "":
-        val_cam_infos = readCamerasFromTransforms(target_path, "transforms_val.json", white_background, extension)
+        val_cam_infos = readCamerasFromTransforms(
+            target_path, "transforms_val.json", white_background, extension
+        )
     else:
-        val_cam_infos = readCamerasFromTransforms(path, "transforms_val.json", white_background, extension)
-    
+        val_cam_infos = readCamerasFromTransforms(
+            path, "transforms_val.json", white_background, extension
+        )
+
     print("Reading Test Transforms")
     if target_path != "":
-        test_cam_infos = readCamerasFromTransforms(target_path, "transforms_test.json", white_background, extension)
+        test_cam_infos = readCamerasFromTransforms(
+            target_path, "transforms_test.json", white_background, extension
+        )
     else:
-        test_cam_infos = readCamerasFromTransforms(path, "transforms_test.json", white_background, extension)
-    
+        test_cam_infos = readCamerasFromTransforms(
+            path, "transforms_test.json", white_background, extension
+        )
+
     print("Reading Test Meshes")
     test_mesh_infos = readMeshesFromTransforms(path, "transforms_test.json")
     if target_path != "":
         print("Reading Target Meshes (Test Division)")
-        tgt_test_mesh_infos = readMeshesFromTransforms(target_path, "transforms_test.json")
+        tgt_test_mesh_infos = readMeshesFromTransforms(
+            target_path, "transforms_test.json"
+        )
     else:
         tgt_test_mesh_infos = {}
-    
+
     if target_path != "" or not eval:
         train_cam_infos.extend(val_cam_infos)
         val_cam_infos = []
@@ -339,20 +520,54 @@ def readDynamicNerfInfo(path, white_background, eval, extension=".png", target_p
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
 
-    scene_info = SceneInfo(point_cloud=None,
-                           train_cameras=train_cam_infos,
-                           val_cameras=val_cam_infos,
-                           test_cameras=test_cam_infos,
-                           nerf_normalization=nerf_normalization,
-                           ply_path=None,
-                           train_meshes=train_mesh_infos,
-                           test_meshes=test_mesh_infos,
-                           tgt_train_meshes=tgt_train_mesh_infos,
-                           tgt_test_meshes=tgt_test_mesh_infos)
+    scene_info = SceneInfo(
+        point_cloud=None,
+        train_cameras=train_cam_infos,
+        val_cameras=val_cam_infos,
+        test_cameras=test_cam_infos,
+        nerf_normalization=nerf_normalization,
+        ply_path=None,
+        train_meshes=train_mesh_infos,
+        test_meshes=test_mesh_infos,
+        tgt_train_meshes=tgt_train_mesh_infos,
+        tgt_test_meshes=tgt_test_mesh_infos,
+    )
     return scene_info
+
+
+def read_goliath_info(path, white_background, eval, extension=".png", target_path=""):
+    train_cameras_info = read_goliath_camera_info(
+        path, "index.json", white_background, extension
+    )
+    # val_cameras_info = read_goliath_camera_info(
+    #     path, "transforms_val.json", white_background, extension
+    # )
+    # test_cameras_info = read_goliath_camera_info(
+    #     path, "transforms_test.json", white_background, extension
+    # )
+    nerf_normalization = getNerfppNorm(train_cameras_info)
+
+    train_meshes_info = read_vertices_from_goliath(path, "index.json")
+    # test_meshes_info = read_vertices_from_goliath(path, "transforms_test.json")
+
+    scene_info = SceneInfo(
+        point_cloud=None,
+        train_cameras=train_cameras_info,
+        val_cameras={},
+        test_cameras={},
+        nerf_normalization=nerf_normalization,
+        ply_path=None,
+        train_meshes=train_meshes_info,
+        test_meshes={},
+        tgt_train_meshes={},
+        tgt_test_meshes={},
+    )
+    return scene_info
+
 
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
-    "DynamicNerf" : readDynamicNerfInfo,
-    "Blender" : readNerfSyntheticInfo,
+    "DynamicNerf": readDynamicNerfInfo,
+    "Blender": readNerfSyntheticInfo,
+    "Goliath": read_goliath_info,
 }

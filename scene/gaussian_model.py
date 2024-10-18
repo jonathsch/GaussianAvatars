@@ -145,7 +145,6 @@ class GaussianModel:
             # Toyota Motor Europe NV/SA and its affiliated companies retain all intellectual property and proprietary rights in and to the following code lines and related documentation. Any commercial use, reproduction, disclosure or distribution of these code lines and related documentation without an express license agreement from Toyota Motor Europe NV/SA is strictly prohibited.
             if self.face_center is None:
                 self.select_mesh_by_timestep(0)
-            
             xyz = torch.bmm(self.face_orien_mat[self.binding], self._xyz[..., None]).squeeze(-1)
             return xyz * self.face_scaling[self.binding] + self.face_center[self.binding]
 
@@ -171,7 +170,7 @@ class GaussianModel:
 
     def create_from_pcd(self, pcd : Optional[BasicPointCloud], spatial_lr_scale : float):
         self.spatial_lr_scale = spatial_lr_scale
-        if pcd == None:
+        if pcd is None:
             assert self.binding is not None
             num_pts = self.binding.shape[0]
             fused_point_cloud = torch.zeros((num_pts, 3)).float().cuda()

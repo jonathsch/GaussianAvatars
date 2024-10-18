@@ -21,6 +21,7 @@ from scene.dataset_readers import sceneLoadTypeCallbacks
 from scene.cameras import Camera
 from scene.gaussian_model import GaussianModel
 from scene.flame_gaussian_model import FlameGaussianModel
+from scene.goliath_gaussian_model import GoliathGaussianModel
 from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
 from utils.general_utils import PILtoTorch
@@ -95,6 +96,9 @@ class Scene:
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
             print("Found transforms_train.json file, assuming Blender data set!")
             scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval)
+        elif os.path.exists(os.path.join(args.source_path, "kinematic_tracking")):
+            print("Found kinematic_tracking folder, assuming Goliath data set!")
+            scene_info = sceneLoadTypeCallbacks["Goliath"](args.source_path, args.white_background, args.eval)
         else:
             assert False, "Could not recognize scene type!"
 
@@ -104,7 +108,7 @@ class Scene:
         self.test_cameras = {}
         
         if not self.loaded_iter:
-            if gaussians.binding == None:
+            if gaussians.binding is None:
                 with open(scene_info.ply_path, 'rb') as src_file, open(os.path.join(self.model_path, "input.ply") , 'wb') as dest_file:
                     dest_file.write(src_file.read())
             json_cams = []
@@ -136,7 +140,7 @@ class Scene:
             self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
         
         # process meshes
-        if gaussians.binding != None:
+        if gaussians.binding is not None:
             self.gaussians.load_meshes(scene_info.train_meshes, scene_info.test_meshes, 
                                        scene_info.tgt_train_meshes, scene_info.tgt_test_meshes)
         
