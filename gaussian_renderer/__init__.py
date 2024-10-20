@@ -18,6 +18,7 @@ from diff_gaussian_rasterization import (
 )
 from scene import GaussianModel, FlameGaussianModel
 from utils.sh_utils import eval_sh
+import gsplat
 
 
 def render(
@@ -35,40 +36,29 @@ def render(
     """
 
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
-    screenspace_points = (
-        torch.zeros_like(
-            pc.get_xyz, dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda"
-        )
-        + 0
-    )
-    try:
-        screenspace_points.retain_grad()
-    except:
-        pass
 
     # Set up rasterization configuration
-    tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
-    tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
+    # tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
+    # tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
 
-    raster_settings = GaussianRasterizationSettings(
-        image_height=int(viewpoint_camera.image_height),
-        image_width=int(viewpoint_camera.image_width),
-        tanfovx=tanfovx,
-        tanfovy=tanfovy,
-        bg=bg_color,
-        scale_modifier=scaling_modifier,
-        viewmatrix=viewpoint_camera.world_view_transform.cuda(),
-        projmatrix=viewpoint_camera.full_proj_transform.cuda(),
-        sh_degree=pc.active_sh_degree,
-        campos=viewpoint_camera.camera_center.cuda(),
-        prefiltered=False,
-        debug=pipe.debug,
-    )
+    # raster_settings = GaussianRasterizationSettings(
+    #     image_height=int(viewpoint_camera.image_height),
+    #     image_width=int(viewpoint_camera.image_width),
+    #     tanfovx=tanfovx,
+    #     tanfovy=tanfovy,
+    #     bg=bg_color,
+    #     scale_modifier=scaling_modifier,
+    #     viewmatrix=viewpoint_camera.world_view_transform.cuda(),
+    #     projmatrix=viewpoint_camera.full_proj_transform.cuda(),
+    #     sh_degree=pc.active_sh_degree,
+    #     campos=viewpoint_camera.camera_center.cuda(),
+    #     prefiltered=False,
+    #     debug=pipe.debug,
+    # )
 
-    rasterizer = GaussianRasterizer(raster_settings=raster_settings)
+    # rasterizer = GaussianRasterizer(raster_settings=raster_settings)
 
     means3D = pc.get_xyz
-    means2D = screenspace_points
     opacity = pc.get_opacity
 
     # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
@@ -103,47 +93,48 @@ def render(
         colors_precomp = override_color
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen).
-    rendered_image, radii = rasterizer(
-        means3D=means3D,
-        means2D=means2D,
-        shs=shs,
-        colors_precomp=colors_precomp,
-        opacities=opacity,
+    # rendered_image, radii = rasterizer(
+    #     means3D=means3D,
+    #     means2D=means2D,
+    #     shs=shs,
+    #     colors_precomp=colors_precomp,
+    #     opacities=opacity,
+    #     scales=scales,
+    #     rotations=rotations,
+    #     cov3D_precomp=cov3D_precomp,
+    # )
+
+    rendered_image, alpha, meta = gsplat.rasterization(
+        means=means3D,
+        quats=rotations,
         scales=scales,
-        rotations=rotations,
-        cov3D_precomp=cov3D_precomp,
+        opacities=opacity.squeeze(-1),
+        colors=colors_precomp if colors_precomp is not None else shs,
+        viewmats=viewpoint_camera.world_view_transform.cuda()
+        .transpose(0, 1)
+        .unsqueeze(0),
+        Ks=viewpoint_camera.K.cuda().unsqueeze(0),
+        width=viewpoint_camera.image_width,
+        height=viewpoint_camera.image_height,
+        sh_degree=pc.active_sh_degree,
     )
+    rendered_image = rendered_image.squeeze(0).permute(2, 0, 1)
+    alpha = alpha.squeeze(0).permute(2, 0, 1)
 
-    # with torch.no_grad():
-    #     _, alpha, _ = gsplat.rasterization(
-    #         means=means3D,
-    #         quats=rotations,
-    #         scales=scales,
-    #         opacities=opacity.squeeze(-1),
-    #         colors=colors_precomp if colors_precomp is not None else shs,
-    #         viewmats=viewpoint_camera.world_view_transform.cuda()
-    #         .transpose(0, 1)
-    #         .unsqueeze(0),
-    #         Ks=viewpoint_camera.K.cuda().unsqueeze(0),
-    #         width=viewpoint_camera.image_width,
-    #         height=viewpoint_camera.image_height,
-    #         sh_degree=pc.active_sh_degree,
-    #     )
-    #     # # info["means2d"].retain_grad()
-    #     # rendered_image = rendered_image.squeeze(0).permute(2, 0, 1)
-    #     print("alpha", alpha.shape)
-    #     alpha = alpha.squeeze(0).permute(2, 0, 1)
-
-    # radii = info["radii"]
-    # means2D = info["means2d"]
-    # screenspace_points = means2D
+    meta["means2d"].retain_grad()
+    radii = torch.zeros(
+        means3D.shape[0], device=meta["radii"].device, dtype=meta["radii"].dtype
+    )
+    radii[meta["gaussian_ids"]] = meta["radii"]
 
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
+
     return {
         "render": rendered_image,
-        "viewspace_points": screenspace_points,
+        "viewspace_points": meta["means2d"],
         "visibility_filter": radii > 0,
         "radii": radii,
+        "gaussian_ids": meta["gaussian_ids"],
         # "alpha": alpha,
     }
