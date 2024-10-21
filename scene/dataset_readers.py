@@ -335,10 +335,12 @@ def read_goliath_camera_info(path, transformsfile, white_background, extension="
             image_path = os.path.join(path, cam_name)
             image_name = Path(cam_name).stem
 
-            image = Image.open(image_path)
-            arr = linear2srgb(np.array(image) / 255.0)
-            image = Image.fromarray((arr * 255.0).astype(np.uint8), "RGB")
-            width, height = image.size
+            # image = Image.open(image_path)
+            # arr = linear2srgb(np.array(image) / 255.0)
+            # image = Image.fromarray((arr * 255.0).astype(np.uint8), "RGB")
+            # width, height = image.size
+            width = frame["w"]
+            height = frame["h"]
 
             fovx = frame["fov_x"] * 2
             fovy = frame["fov_y"] * 2
@@ -366,7 +368,7 @@ def read_goliath_camera_info(path, transformsfile, white_background, extension="
                     FovY=fovy,
                     FovX=fovx,
                     bg=bg,
-                    image=image,
+                    image=None,
                     image_path=image_path,
                     image_name=image_name,
                     width=width,
