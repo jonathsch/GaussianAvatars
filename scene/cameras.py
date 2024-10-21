@@ -85,6 +85,7 @@ class MiniCam:
         world_view_transform,
         full_proj_transform,
         timestep,
+        K = None,
     ):
         self.image_width = width
         self.image_height = height
@@ -97,3 +98,4 @@ class MiniCam:
         view_inv = torch.inverse(self.world_view_transform)
         self.camera_center = view_inv[3][:3]
         self.timestep = timestep
+        self.K = torch.as_tensor(K, dtype=torch.float32) if K is not None else None

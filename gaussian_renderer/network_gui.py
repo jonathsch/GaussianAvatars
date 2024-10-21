@@ -14,6 +14,7 @@ import traceback
 import socket
 import json
 from scene.cameras import MiniCam
+from utils.camera_utils import fov2focal
 
 host = "127.0.0.1"
 port = 6009
@@ -77,7 +78,18 @@ def receive():
             full_proj_transform = torch.reshape(torch.tensor(msg["view_projection_matrix"]), (4, 4)).cuda()
             full_proj_transform[:,1] = -full_proj_transform[:,1]
             timestep = msg["timestep"] if "timestep" in msg else None
-            custom_cam = MiniCam(width, height, msg["fov_y"], msg["fov_x"], msg["z_near"], msg["z_far"], world_view_transform, full_proj_transform, timestep)
+            
+            focal_x = fov2focal(msg["fov_x"], width)
+            focal_y = fov2focal(msg["fov_y"], height)
+            cx = width / 2
+            cy = height / 2
+            
+            K = torch.tensor([
+                [focal_x, 0, cx],
+                [0, focal_y, cy],
+                [0, 0, 1]
+            ])
+            custom_cam = MiniCam(width, height, msg["fov_y"], msg["fov_x"], msg["z_near"], msg["z_far"], world_view_transform, full_proj_transform, timestep, K=K)
         except Exception as e:
             print("")
             print(e)

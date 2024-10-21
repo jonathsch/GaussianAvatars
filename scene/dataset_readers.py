@@ -344,11 +344,13 @@ def read_goliath_camera_info(path, transformsfile, white_background, extension="
             fovy = frame["fov_y"] * 2
             fx = fov2focal(fovx, width)
             fy = fov2focal(fovy, height)
+            cx = frame["cx"] / 2
+            cy = frame["cy"] / 2
 
             K = np.array(
                 [
-                    [fx, 0, width / 2],
-                    [0, fy, height / 2],
+                    [fx, 0, cx],
+                    [0, fy, cy],
                     [0, 0, 1],
                 ]
             )
