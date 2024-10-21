@@ -36,6 +36,12 @@ def render(
     """
 
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
+    # screenspace_points = torch.zeros_like(pc.get_xyz, dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
+    # try:
+    #     screenspace_points.retain_grad()
+    # except:
+    #     pass
+
 
     # Set up rasterization configuration
     # tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
@@ -59,6 +65,7 @@ def render(
     # rasterizer = GaussianRasterizer(raster_settings=raster_settings)
 
     means3D = pc.get_xyz
+    # means2D = screenspace_points
     opacity = pc.get_opacity
 
     # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
@@ -130,11 +137,20 @@ def render(
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
 
+    # return {
+    #     "render": rendered_image,
+    #     "viewspace_points": screenspace_points,
+    #     "visibility_filter": radii > 0,
+    #     "radii": radii,
+    #     "gaussian_ids": None,
+    #     # "alpha": alpha,
+    # }
+
     return {
         "render": rendered_image,
         "viewspace_points": meta["means2d"],
         "visibility_filter": radii > 0,
         "radii": radii,
-        "gaussian_ids": meta["gaussian_ids"],
+        "meta": meta,
         # "alpha": alpha,
     }
