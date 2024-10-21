@@ -513,10 +513,12 @@ class GaussianModel:
 
         torch.cuda.empty_cache()
 
-    def add_densification_stats(self, viewspace_point_tensor, update_filter, gaussian_ids=None):
-        if gaussian_ids is not None:
+    def add_densification_stats(self, viewspace_point_tensor, update_filter, meta=None):
+        if meta is not None:
             means2d_grad = torch.zeros(self.get_xyz.shape[0], 2, device="cuda")
-            means2d_grad[gaussian_ids] = viewspace_point_tensor.grad
+            means2d_grad[meta["gaussian_ids"]] = viewspace_point_tensor.grad
+            means2d_grad[..., 0] *= meta["width"] / 2.0 * meta["n_cameras"]
+            means2d_grad[..., 1] *= meta["height"] / 2.0 * meta["n_cameras"]
             self.xyz_gradient_accum[update_filter] += torch.norm(means2d_grad[update_filter,:2], dim=-1, keepdim=True)
         else:
             self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
