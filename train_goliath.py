@@ -310,23 +310,13 @@ def training(
                     viewspace_point_tensor, visibility_filter, meta=render_pkg["meta"]
                 )
 
-                if (
-                    iteration > opt.densify_from_iter
-                    and iteration % opt.densification_interval == 0
-                ):
-                    size_threshold = (
-                        20 if iteration > opt.opacity_reset_interval else None
-                    )
-                    gaussians.densify_and_prune(
-                        opt.densify_grad_threshold,
-                        0.005,
-                        scene.cameras_extent,
-                        size_threshold,
-                    )
+                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                    size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
 
-                if iteration % opt.opacity_reset_interval == 0 or (
-                    dataset.white_background and iteration == opt.densify_from_iter
-                ):
+                    print(f"Iteration {iteration}: Now having {gaussians.get_xyz.shape[0]} gaussians.")
+
+                if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
 
             # Optimizer step
