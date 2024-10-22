@@ -9,6 +9,8 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 
+from typing import Optional
+
 import torch
 import math
 from typing import Union
@@ -26,6 +28,7 @@ def render(
     pc: Union[GaussianModel, FlameGaussianModel],
     pipe,
     bg_color: torch.Tensor,
+    bg_img: Optional[torch.Tensor] = None,
     scaling_modifier=1.0,
     override_color=None,
 ):
@@ -125,8 +128,11 @@ def render(
         height=viewpoint_camera.image_height,
         sh_degree=pc.active_sh_degree,
     )
-    rendered_image = rendered_image.squeeze(0).permute(2, 0, 1)
-    alpha = alpha.squeeze(0).permute(2, 0, 1)
+    rendered_image = rendered_image.squeeze(0).permute(2, 0, 1) # [3, H, W]
+    alpha = alpha.squeeze(0).permute(2, 0, 1) # [1, H, W]
+
+    if bg_img is not None:
+        rendered_image = rendered_image * alpha + bg_img * (1 - alpha)
 
     meta["means2d"].retain_grad()
     radii = torch.zeros(

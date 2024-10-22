@@ -24,3 +24,8 @@ def error_map(img1, img2):
     cmap = cm.get_cmap("seismic")
     error_map = cmap(error.cpu())
     return torch.from_numpy(error_map[..., :3]).permute(2, 0, 1)
+
+def linear2srgb(img: torch.Tensor, gamma: float = 2.4) -> torch.Tensor:
+    linear_part = img * 12.92
+    exp_part = 1.055 * (torch.max(img, torch.tensor(0.0031308)) ** (1 / gamma)) - 0.055
+    return torch.where(img <= 0.0031308, linear_part, exp_part)

@@ -358,7 +358,7 @@ def read_goliath_camera_info(path, transformsfile, white_background, extension="
             )
 
             timestep = frame["timestep_index"] if "timestep_index" in frame else None
-            camera_id = frame["camera_index"] if "camera_id" in frame else None
+            camera_id = frame["camera_id"] if "camera_id" in frame else None
 
             cam_info.append(
                 CameraInfo(

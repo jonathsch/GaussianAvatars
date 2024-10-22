@@ -51,6 +51,8 @@ class CameraDataset(torch.utils.data.Dataset):
             arr = norm_data[:,:,:3] * norm_data[:, :, 3:4] + camera.bg * (1 - norm_data[:, :, 3:4])
             image = Image.fromarray(np.array(arr*255.0, dtype=np.byte), "RGB")
 
+            # load background image
+
             # ---- from loadCam() and Camera.__init__() ----
             resized_image_rgb = PILtoTorch(image, (camera.image_width, camera.image_height))
 
