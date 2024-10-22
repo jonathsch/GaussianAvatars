@@ -19,6 +19,7 @@ class Camera(nn.Module):
     def __init__(
         self,
         colmap_id,
+        cam_id,
         R,
         T,
         FoVx,
@@ -52,6 +53,7 @@ class Camera(nn.Module):
         self.image_name = image_name
         self.timestep = timestep
         self.K = torch.as_tensor(K, dtype=torch.float32) if K is not None else None
+        self.cam_id = cam_id
 
         self.zfar = 100.0
         self.znear = 0.01
