@@ -114,7 +114,24 @@ def render(
     #     cov3D_precomp=cov3D_precomp,
     # )
 
-    rendered_image, alpha, meta = gsplat.rasterization(
+    # rendered_image, alpha, meta = gsplat.rasterization(
+    #     means=means3D,
+    #     quats=rotations,
+    #     scales=scales,
+    #     opacities=opacity.squeeze(-1),
+    #     colors=colors_precomp if colors_precomp is not None else shs,
+    #     viewmats=viewpoint_camera.world_view_transform.cuda()
+    #     .transpose(0, 1)
+    #     .unsqueeze(0),
+    #     Ks=viewpoint_camera.K.cuda().unsqueeze(0),
+    #     width=viewpoint_camera.image_width,
+    #     height=viewpoint_camera.image_height,
+    #     sh_degree=pc.active_sh_degree,
+    # )
+
+    pbr_materials = pc.get_pbr_material
+    
+    rendered_image, alpha, render_normals, normals_from_depth, render_dist, render_median,  meta = gsplat.rasterization_2dgs(
         means=means3D,
         quats=rotations,
         scales=scales,
@@ -127,7 +144,29 @@ def render(
         width=viewpoint_camera.image_width,
         height=viewpoint_camera.image_height,
         sh_degree=pc.active_sh_degree,
+        render_mode="RGB+D"
     )
+    rendered_image = rendered_image[..., :3].contiguous()
+    
+    # with torch.no_grad():
+    #     g_buffer, _, _, _, _, _,  _ = gsplat.rasterization_2dgs(
+    #         means=means3D,
+    #         quats=rotations,
+    #         scales=scales,
+    #         opacities=opacity.squeeze(-1),
+    #         colors=pbr_materials,
+    #         viewmats=viewpoint_camera.world_view_transform.cuda()
+    #         .transpose(0, 1)
+    #         .unsqueeze(0),
+    #         Ks=viewpoint_camera.K.cuda().unsqueeze(0),
+    #         width=viewpoint_camera.image_width,
+    #         height=viewpoint_camera.image_height,
+    #         # sh_degree=pc.active_sh_degree,
+    #         render_mode="RGB"
+    #     )
+    #     kd = g_buffer[..., :3].squeeze(0).permute(2, 0, 1).clamp(0, 1) # [3, H, W]
+    #     ks = g_buffer[..., 3:6].squeeze(0).permute(2, 0, 1).clamp(0, 1) # [3, H, W]
+
     rendered_image = rendered_image.squeeze(0).permute(2, 0, 1) # [3, H, W]
     alpha = alpha.squeeze(0).permute(2, 0, 1) # [1, H, W]
 
@@ -158,5 +197,7 @@ def render(
         "visibility_filter": radii > 0,
         "radii": radii,
         "meta": meta,
-        # "alpha": alpha,
+        "alpha": alpha,
+        "render_normals": render_normals.squeeze(0).permute(2, 0, 1), # [3, H, W]
+        "normals_from_depth": normals_from_depth.squeeze(0).permute(2, 0, 1), # [3, H, W]
     }

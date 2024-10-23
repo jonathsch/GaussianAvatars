@@ -98,3 +98,30 @@ def camera_to_JSON(id, camera: Camera):
         "fx": fov2focal(camera.FovX, camera.width),
     }
     return camera_entry
+
+
+def look_at(eye: np.ndarray, at: np.ndarray, up: np.ndarray):
+    z = (eye - at) / np.linalg.norm(eye - at)
+    x = np.cross(up, z) / np.linalg.norm(np.cross(up, z))
+    y = np.cross(z, x)
+    return np.array(
+        [
+            [x[0], y[0], z[0], eye[0]],
+            [x[1], y[1], z[1], eye[1]],
+            [x[2], y[2], z[2], eye[2]],
+            [0, 0, 0, 1],
+        ]
+    )
+
+def get_camera_trajectory(num_frames: int) -> np.ndarray:
+    # Assume head is at origin facing towards z-axis
+    x_path = np.sin(np.linspace(0.0, 2 * np.pi, num_frames))
+    y_path = -np.cos(np.linspace(0.0, 2 * np.pi, num_frames))
+    z = 1.0
+
+    camera_trajectory = []
+    for x, y in zip(x_path, y_path):
+        T = look_at(np.array([x, y, z]), np.array([0.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0]))
+        camera_trajectory.append(T)
+    
+    return np.stack(camera_trajectory, axis=0) # [num_frames, 4, 4]

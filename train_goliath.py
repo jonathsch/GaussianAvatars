@@ -31,6 +31,7 @@ from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from torchvision.utils import save_image
 from utils.image_utils import linear2srgb
+from utils.camera_utils import get_camera_trajectory
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -203,11 +204,22 @@ def training(
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
 
-        if iteration % 1000 == 0:
+        if iteration % 2500 == 0:
             save_dir = os.path.join(dataset.model_path, "images")
             os.makedirs(save_dir, exist_ok=True)
             save_image(linear2srgb(image), os.path.join(save_dir, f"render_{iteration:06d}.jpg"))
             save_image(linear2srgb(gt_image), os.path.join(save_dir, f"gt_{iteration:06d}.jpg"))
+
+            render_normals = (render_pkg["render_normals"] / render_pkg["alpha"]) * 0.5 + 0.5
+            normals_from_depth = render_pkg["normals_from_depth"] * 0.5 + 0.5
+
+            save_image(render_normals, os.path.join(save_dir, f"render_normals_{iteration:06d}.jpg"))
+            save_image(normals_from_depth, os.path.join(save_dir, f"normals_from_depth_{iteration:06d}.jpg"))
+
+            # kd = render_pkg["kd"]
+            # ks = render_pkg["ks"]
+            # save_image(kd, os.path.join(save_dir, f"kd_{iteration:06d}.jpg"))
+            # save_image(ks, os.path.join(save_dir, f"ks_{iteration:06d}.jpg"))
 
         losses = {}
         losses["l1"] = l1_loss(image, gt_image) * (1.0 - opt.lambda_dssim)
@@ -312,7 +324,7 @@ def training(
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
+                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.05, scene.cameras_extent, size_threshold)
 
                     print(f"Iteration {iteration}: Now having {gaussians.get_xyz.shape[0]} gaussians.", flush=True)
 
