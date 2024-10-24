@@ -173,7 +173,7 @@ def render(
     if bg_img is not None:
         rendered_image = rendered_image * alpha + bg_img * (1 - alpha)
 
-    meta["means2d"].retain_grad()
+    meta["gradient_2dgs"].retain_grad()
     radii = torch.zeros(
         means3D.shape[0], device=meta["radii"].device, dtype=meta["radii"].dtype
     )
@@ -193,7 +193,7 @@ def render(
 
     return {
         "render": rendered_image,
-        "viewspace_points": meta["means2d"],
+        "viewspace_points": meta["gradient_2dgs"],
         "visibility_filter": radii > 0,
         "radii": radii,
         "meta": meta,
