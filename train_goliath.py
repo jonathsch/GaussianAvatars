@@ -324,7 +324,7 @@ def training(
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.05, scene.cameras_extent, size_threshold)
+                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
 
                     print(f"Iteration {iteration}: Now having {gaussians.get_xyz.shape[0]} gaussians.", flush=True)
 
