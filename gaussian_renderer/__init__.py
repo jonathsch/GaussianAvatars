@@ -45,7 +45,6 @@ def render(
     # except:
     #     pass
 
-
     # Set up rasterization configuration
     # tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
     # tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
@@ -130,8 +129,16 @@ def render(
     # )
 
     pbr_materials = pc.get_pbr_material
-    
-    rendered_image, alpha, render_normals, normals_from_depth, render_dist, render_median,  meta = gsplat.rasterization_2dgs(
+
+    (
+        rendered_image,
+        alpha,
+        render_normals,
+        normals_from_depth,
+        render_dist,
+        render_median,
+        meta,
+    ) = gsplat.rasterization_2dgs(
         means=means3D,
         quats=rotations,
         scales=scales,
@@ -144,10 +151,10 @@ def render(
         width=viewpoint_camera.image_width,
         height=viewpoint_camera.image_height,
         sh_degree=pc.active_sh_degree,
-        render_mode="RGB+D"
+        render_mode="RGB+D",
     )
     rendered_image = rendered_image[..., :3].contiguous()
-    
+
     # with torch.no_grad():
     #     g_buffer, _, _, _, _, _,  _ = gsplat.rasterization_2dgs(
     #         means=means3D,
@@ -167,8 +174,8 @@ def render(
     #     kd = g_buffer[..., :3].squeeze(0).permute(2, 0, 1).clamp(0, 1) # [3, H, W]
     #     ks = g_buffer[..., 3:6].squeeze(0).permute(2, 0, 1).clamp(0, 1) # [3, H, W]
 
-    rendered_image = rendered_image.squeeze(0).permute(2, 0, 1) # [3, H, W]
-    alpha = alpha.squeeze(0).permute(2, 0, 1) # [1, H, W]
+    rendered_image = rendered_image.squeeze(0).permute(2, 0, 1)  # [3, H, W]
+    alpha = alpha.squeeze(0).permute(2, 0, 1)  # [1, H, W]
 
     if bg_img is not None:
         rendered_image = rendered_image * alpha + bg_img * (1 - alpha)
@@ -198,6 +205,60 @@ def render(
         "radii": radii,
         "meta": meta,
         "alpha": alpha,
-        "render_normals": render_normals.squeeze(0).permute(2, 0, 1), # [3, H, W]
-        "normals_from_depth": normals_from_depth.squeeze(0).permute(2, 0, 1), # [3, H, W]
+        "render_normals": render_normals.squeeze(0).permute(2, 0, 1),  # [3, H, W]
+        "normals_from_depth": normals_from_depth.squeeze(0).permute(
+            2, 0, 1
+        ),  # [3, H, W]
+    }
+
+
+def render_gsplat(
+    world_to_cam: torch.Tensor,
+    K: torch.Tensor,
+    width: int,
+    height: int,
+    pc: Union[GaussianModel, FlameGaussianModel],
+):
+    means3d = pc.get_xyz
+    opacity = pc.get_opacity
+    scales = pc.get_scaling
+    rotations = pc.get_rotation
+    shs = pc.get_features
+    
+    (
+        rendered_image,
+        alpha,
+        render_normals,
+        normals_from_depth,
+        render_dist,
+        render_median,
+        meta,
+    ) = gsplat.rasterization_2dgs(
+        means=means3d,
+        quats=rotations,
+        scales=scales,
+        opacities=opacity.squeeze(-1),
+        colors=shs,
+        viewmats=world_to_cam.unsqueeze(0),
+        Ks=K.unsqueeze(0),
+        width=width,
+        height=height,
+        sh_degree=pc.active_sh_degree,
+        render_mode="RGB+ED",
+    )
+    rendered_image, render_depth = rendered_image[..., :3].contiguous(), rendered_image[..., 3:4].contiguous()
+
+    rendered_image = rendered_image.squeeze(0) # [H, W, 3]
+    alpha = alpha.squeeze(0).repeat(1, 1, 3) # [H, W, 3]
+    render_depth = render_depth.squeeze(0).repeat(1, 1, 3) # [H, W, 3]
+
+    render_normals = render_normals.squeeze(0) * 0.5 + 0.5 # [H, W, 3]
+    normals_from_depth = normals_from_depth.squeeze(0) * 0.5 + 0.5 # [H, W, 3]
+
+    return {
+        "render": rendered_image,
+        "alpha": alpha,
+        "depth": render_depth,
+        "render_normals": render_normals,
+        "normals_from_depth": normals_from_depth
     }

@@ -18,7 +18,7 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from random import randint
 from utils.loss_utils import l1_loss, ssim
-from gaussian_renderer import render, network_gui
+from gaussian_renderer import render, render_gsplat, network_gui
 from mesh_renderer import NVDiffRenderer
 import sys
 from scene import Scene, GaussianModel, GoliathGaussianModel
@@ -32,6 +32,7 @@ from arguments import ModelParams, PipelineParams, OptimizationParams
 from torchvision.utils import save_image
 from utils.image_utils import linear2srgb
 from utils.camera_utils import get_camera_trajectory
+import av
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -50,7 +51,46 @@ def training(
     checkpoint_iterations,
     checkpoint,
     debug_from,
-):
+):  
+    @ torch.no_grad()
+    def render_trajectory(K: torch.Tensor, width: int, height: int, step: int):
+        cam_path = get_camera_trajectory(120) # [120, 4, 4]
+        cam_path = torch.from_numpy(cam_path).to(K)
+
+        container = av.open(os.path.join(dataset.model_path, "images", f"eval_{step:06d}.mp4"), "w")
+        stream = container.add_stream("mpeg4", rate=30)
+        stream.width = 4 * width
+        stream.height = height
+        stream.pix_fmt = "yuv420p"
+        stream.bit_rate = 4 * 8000000
+
+        # p = pv.Plotter()
+        # add_coordinate_axes(p)
+        # add_camera_frustum(p, Pose(viewpoint_cam.world_view_transform.cpu().numpy().T, pose_type=PoseType.WORLD_2_CAM, camera_coordinate_convention=CameraCoordinateConvention.OPEN_CV), Intrinsics(K.cpu().numpy()))
+
+        for i, w2c in enumerate(cam_path):
+            # add_camera_frustum(p, Pose(w2c.cpu().numpy(), pose_type=PoseType.WORLD_2_CAM, camera_coordinate_convention=CameraCoordinateConvention.OPEN_CV), Intrinsics(K.cpu().numpy()))
+            
+            render_pkg = render_gsplat(w2c, K, width, height, gaussians)
+
+            rgb = (linear2srgb(render_pkg["render"]) * 255).cpu().numpy().astype(np.uint8)
+            depth = (render_pkg["depth"] * 255).cpu().numpy().astype(np.uint8)
+            render_normals = (render_pkg["render_normals"] * 255).cpu().numpy().astype(np.uint8)
+            normals_from_depth = (render_pkg["normals_from_depth"] * 255).cpu().numpy().astype(np.uint8)
+
+            canvas = np.concatenate([rgb, depth, render_normals, normals_from_depth], axis=1) # [H, 4W, 3]
+            frame = av.VideoFrame.from_ndarray(canvas, format="rgb24")
+            for packet in stream.encode(frame):
+                container.mux(packet)
+        
+        # p.show()
+        # return
+        
+        for packet in stream.encode():
+            container.mux(packet)
+        container.close()
+
+
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     if dataset.bind_to_mesh:
@@ -216,10 +256,9 @@ def training(
             save_image(render_normals, os.path.join(save_dir, f"render_normals_{iteration:06d}.jpg"))
             save_image(normals_from_depth, os.path.join(save_dir, f"normals_from_depth_{iteration:06d}.jpg"))
 
-            # kd = render_pkg["kd"]
-            # ks = render_pkg["ks"]
-            # save_image(kd, os.path.join(save_dir, f"kd_{iteration:06d}.jpg"))
-            # save_image(ks, os.path.join(save_dir, f"ks_{iteration:06d}.jpg"))
+            K = viewpoint_cam.K.cuda()
+            with torch.no_grad():
+                render_trajectory(K, width, height, iteration)
 
         losses = {}
         losses["l1"] = l1_loss(image, gt_image) * (1.0 - opt.lambda_dssim)

@@ -9,6 +9,7 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 
+from typing import Literal
 from tqdm import tqdm
 from scene.cameras import Camera
 import numpy as np
@@ -100,24 +101,33 @@ def camera_to_JSON(id, camera: Camera):
     return camera_entry
 
 
-def look_at(eye: np.ndarray, at: np.ndarray, up: np.ndarray):
-    z = (eye - at) / np.linalg.norm(eye - at)
-    x = np.cross(up, z) / np.linalg.norm(np.cross(up, z))
-    y = np.cross(z, x)
-    return np.array(
-        [
-            [x[0], y[0], z[0], eye[0]],
-            [x[1], y[1], z[1], eye[1]],
-            [x[2], y[2], z[2], eye[2]],
-            [0, 0, 0, 1],
-        ]
-    )
+def look_at(eye: np.ndarray, at: np.ndarray, up: np.ndarray, convention: Literal["openCV", "openGL"] = "openCV") -> np.ndarray:
+    a = eye - at
+    w = a / np.linalg.norm(a)
+    u = np.cross(up, w)
+    u = u / np.linalg.norm(u)
+    v = np.cross(w, u)
+    translate = np.array([[1, 0, 0, eye[0]], 
+                              [0, 1, 0, eye[1]], 
+                              [0, 0, 1, eye[2]], 
+                              [0, 0, 0, 1]], dtype=eye.dtype)
+    rotate = np.array([[u[0], u[1], u[2], 0], 
+                           [v[0], v[1], v[2], 0], 
+                           [w[0], w[1], w[2], 0], 
+                           [0, 0, 0, 1]], dtype=eye.dtype)
+    T = rotate @ translate
+    
+    if convention == "openCV":
+        T[:, [1, 2]] *= -1
+    
+    return T
 
 def get_camera_trajectory(num_frames: int) -> np.ndarray:
     # Assume head is at origin facing towards z-axis
-    x_path = np.sin(np.linspace(0.0, 2 * np.pi, num_frames))
+    radius = 1.5
+    x_path = np.sin(np.linspace(0.0, 2 * np.pi, num_frames)) * radius
     y_path = -np.cos(np.linspace(0.0, 2 * np.pi, num_frames))
-    z = 1.0
+    z = radius
 
     camera_trajectory = []
     for x, y in zip(x_path, y_path):
