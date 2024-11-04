@@ -159,7 +159,7 @@ class GaussianModel:
 
     @property
     def get_pbr_material(self):
-        return self._pbr_material
+        return torch.nn.functional.sigmoid(self._pbr_material)
     
     @property
     def get_opacity(self):
@@ -218,8 +218,8 @@ class GaussianModel:
 
     def training_setup(self, training_args):
         self.percent_dense = training_args.percent_dense
-        self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-        self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.xyz_gradient_accum = torch.zeros((self._xyz.shape[0], 1), device="cuda")
+        self.denom = torch.zeros((self._xyz.shape[0], 1), device="cuda")
 
         l = [
             {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
@@ -360,6 +360,7 @@ class GaussianModel:
         for group in self.optimizer.param_groups:
             if group["name"] == name:
                 stored_state = self.optimizer.state.get(group['params'][0], None)
+                print(self.optimizer.state)
                 stored_state["exp_avg"] = torch.zeros_like(tensor)
                 stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
 
@@ -556,7 +557,7 @@ class GaussianModel:
             means2d_grad[meta["gaussian_ids"]] = viewspace_point_tensor.grad
             means2d_grad[..., 0] *= meta["width"] / 2.0 * meta["n_cameras"]
             means2d_grad[..., 1] *= meta["height"] / 2.0 * meta["n_cameras"]
-            self.xyz_gradient_accum[update_filter] += torch.norm(means2d_grad[update_filter,:2], dim=-1, keepdim=True)
+            self.xyz_gradient_accum[update_filter] += torch.norm(means2d_grad[update_filter, :], dim=-1, keepdim=True)
         else:
             self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         
