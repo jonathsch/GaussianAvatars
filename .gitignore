@@ -8,6 +8,9 @@ tensorboard_3d
 screenshots
 job/
 
+**.slangtorch_cache
+*.lock
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
