@@ -24,11 +24,13 @@ class GoliathGaussianModel(GaussianModel):
     ):
         super().__init__(sh_degree)
 
-        self.faces = torch.from_numpy(
-            np.load(
-                "/mnt/cluster/pegasus/jschmidt/goliath/m--20230306--0707--AXE977--pilot--ProjectGoliath--Head/kinematic_tracking/faces.npy"
-            )
-        ).cuda()
+        mesh = load_obj(
+            "/mnt/cluster/pegasus/jschmidt/goliath/m--20230306--0707--AXE977--pilot--ProjectGoliath--Head/kinematic_tracking/template_mesh.obj"
+        )
+
+        self.vertices = mesh.v_pos.cuda()
+        self.faces = mesh.t_pos_idx.cuda()
+
         self.vertices_dict = None
 
         # binding is initialized once the mesh topology is known
@@ -38,7 +40,6 @@ class GoliathGaussianModel(GaussianModel):
 
     def load_meshes(self, train_meshes, test_meshes, tgt_train_meshes, tgt_test_meshes):
         if self.vertices_dict is None:
-
             meshes = {**train_meshes, **test_meshes}
             tgt_meshes = {**tgt_train_meshes, **tgt_test_meshes}
             pose_meshes = meshes if len(tgt_meshes) == 0 else tgt_meshes
@@ -63,11 +64,12 @@ class GoliathGaussianModel(GaussianModel):
             pass
 
     def select_mesh_by_timestep(self, timestep, original=False):
-        self.timestep = timestep
+        self.update_mesh_properties(self.vertices)
+        # self.timestep = timestep
 
-        verts = self.vertices_dict[timestep]
+        # verts = self.vertices_dict[timestep]
 
-        self.update_mesh_properties(verts)
+        # self.update_mesh_properties(verts)
 
     def update_mesh_properties(self, verts: torch.Tensor):
         faces = self.faces
