@@ -21,12 +21,11 @@ class GoliathGaussianModel(GaussianModel):
     def __init__(
         self,
         sh_degree: int,
+        template_mesh_path: str,
     ):
         super().__init__(sh_degree)
 
-        mesh = load_obj(
-            "/mnt/cluster/pegasus/jschmidt/goliath/m--20230306--0707--AXE977--pilot--ProjectGoliath--Head/kinematic_tracking/template_mesh.obj"
-        )
+        mesh = load_obj(template_mesh_path)
 
         self.vertices = mesh.v_pos.cuda()
         self.faces = mesh.t_pos_idx.cuda()

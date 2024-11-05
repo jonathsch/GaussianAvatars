@@ -3,6 +3,7 @@ from typing import Optional, Iterable
 from dataclasses import dataclass, asdict
 from datetime import datetime
 import logging
+import yaml
 
 import numpy as np
 from tqdm import tqdm
@@ -24,7 +25,7 @@ from datasets.goliath import GoliathHeadDataset, collate_fn, worker_init_fn
 from gaussian_renderer import render_gsplat
 from utils.vector_ops import to_hvec
 from torch.profiler import profile, record_function, ProfilerActivity
-from utils.camera_utils import get_camera_trajectory
+from utils.camera_utils import get_camera_trajectory, get_light_path
 import av
 import gsplat
 from slang.ops import unproject_depth
@@ -135,13 +136,20 @@ class Runner:
         self.log_media_dir.mkdir()
         if config.use_wandb:
             wandb.init(
+                dir=config.output_dir.absolute(),
                 project="rga",
                 group="gaussian_avatar_2dgs_goliath",
                 config=asdict(config),
                 tags=["2dgs", "goliath"],
             )
 
-        self.gaussians = GoliathGaussianModel(3)
+        # Dump config
+        with open(self.log_dir / "config.yaml", "w") as f:
+            yaml.dump(asdict(config), f)
+
+        self.gaussians = GoliathGaussianModel(
+            3, config.data.root_path / "kinematic_tracking" / "template_mesh.obj"
+        )
         self.mesh_renderer = NVDiffRenderer()
 
         if config.ckpt:
@@ -181,29 +189,6 @@ class Runner:
         rotations = self.gaussians.get_rotation
         shs = self.gaussians.get_features
         pbr_material = self.gaussians.get_pbr_material
-
-        # Render with SH
-        # (
-        #     render_rgbd,
-        #     render_alpha,
-        #     render_normals,
-        #     normals_from_depth,
-        #     render_dist,
-        #     render_median,
-        #     meta,
-        # ) = gsplat.rasterization_2dgs(
-        #     means=means3d,
-        #     quats=rotations,
-        #     scales=scales,
-        #     opacities=opacity.squeeze(-1),
-        #     colors=shs,
-        #     viewmats=world_to_cam,
-        #     Ks=Ks,
-        #     width=width,
-        #     height=height,
-        #     sh_degree=self.gaussians.active_sh_degree,
-        #     render_mode="RGB+D",
-        # )
 
         (
             render_pbr,
@@ -258,14 +243,74 @@ class Runner:
             "render_normals": render_normals,
             "normals_from_depth": normals_from_depth,
             "render_dist": render_dist,
+            "render_median": render_median,
             "kd": kd,
             "ks": ks,
             "meta": meta,
         }
 
-    def render_trajectory(self, step: int, num_frames: int = 96):
-        pass
+    @torch.no_grad()
+    def render_trajectory(
+        self, K: torch.Tensor, step: int, width: int, height: int, num_frames: int = 96
+    ):
+        """
+        Render a trajectory around the head and save as video.
 
+        Args:
+            K: Camera intrinsics [1, 3, 3]
+            step: Current training step
+            width: Render width
+            height: Render height
+            num_frames: Number of frames to render
+        """
+        cam_path = get_camera_trajectory(num_frames=num_frames)  # [N, 4, 4]
+        cam_path = torch.from_numpy(cam_path).to(K)
+
+        light_path = get_light_path(num_frames=num_frames)  # [N, 3]
+        light_path = torch.from_numpy(light_path).to(K)
+        light_intensity = torch.tensor(3.0, device=self.device).reshape(1, 1, 1)
+
+        container = av.open(str(self.log_media_dir / f"eval_{step:06d}.mp4"), "w")
+        stream = container.add_stream("mpeg4", rate=24)
+        stream.width = 4 * width
+        stream.height = height
+        stream.pix_fmt = "yuv420p"
+        stream.bit_rate = 4 * 8000000
+
+        for i, (w2c, l_pos) in enumerate(zip(cam_path, light_path)):
+            # Get vertices of i-th timestep
+            vertices = self.val_set.get_vertices_by_timestep(i).cuda()  # [V, 3]
+
+            render_pkg = self.render(
+                vertices=vertices,
+                world_to_cam=w2c.unsqueeze(0),
+                Ks=K.unsqueeze(0),
+                width=width,
+                height=height,
+                light_pos=l_pos.view(1, 1, 3),
+                light_intensity=light_intensity,
+            )
+
+            image = render_pkg["render"].squeeze().cpu().numpy()  # [H, W, 3]
+            kd = render_pkg["kd"].squeeze().cpu().numpy()  # [H, W, 3]
+            ks = render_pkg["ks"].squeeze().cpu().numpy()
+            normals = (
+                render_pkg["render_normals"].squeeze().cpu().numpy() * 0.5 + 0.5
+            )  # [H, W, 3]
+
+            canvas = np.concatenate([image, kd, ks, normals], axis=1) * 255
+            canvas = canvas.clip(0, 255).astype(np.uint8)
+
+            frame = av.VideoFrame.from_ndarray(canvas, format="rgb24")
+            for packet in stream.encode(frame):
+                container.mux(packet)
+
+        for packet in stream.encode():
+            container.mux(packet)
+
+        container.close()
+
+    @torch.no_grad()
     def evaluate(self, step: int):
         dataloader_val = DataLoader(
             self.val_set,
@@ -282,44 +327,77 @@ class Runner:
 
         render_height, render_width = self.val_set.get_image_size()
 
+        gt_imgs, pred_imgs = [], []
         for idx, batch in enumerate(iter(dataloader_val)):
-            gt_img = batch["image"].to(self.device)
-            head_pose = batch["head_pose"].to(self.device)
-            head_to_world = torch.cat(
+            if batch is None:
+                continue
+
+            # Get mesh vertices from head to world space
+            head_pose = batch["head_pose"]
+            head_pose_4x4 = torch.cat(
                 [head_pose, torch.zeros_like(head_pose[:, :1, :])], dim=1
             )
-            head_to_world[:, 3, 3] = 1.0
-            world_to_cam = batch["world_to_cam"].to(self.device)
-            mvp = torch.bmm(world_to_cam, head_to_world)
-            Ks = batch["K"].to(self.device)
-            vertices = batch["vertices"].to(self.device)
+            head_pose_4x4[:, 3, 3] = 1.0
+            w2c = batch["world_to_cam"] @ head_pose_4x4
 
-            self.gaussians.update_mesh_properties(vertices.squeeze(0))
+            world_to_cam = w2c
+            world_to_cam = world_to_cam.cuda()
+            K = batch["K"].cuda()
 
-            render_pkg = render_gsplat(
-                world_to_cam=mvp,
-                K=Ks,
-                width=render_width,
-                height=render_height,
-                pc=self.gaussians,
+            verts = batch["vertices"].squeeze(0).cuda()
+            l_pos = (batch["light_pos"] - head_pose[:, :3, 3]) @ head_pose[:, :3, :3]
+            lint = batch["light_intensity"].cuda()
+
+            background = batch["background"].cuda()
+            fully_lit = batch["is_fully_lit_frame"].cuda()
+            background = background * fully_lit[:, None, None, None].float()
+            background = background.permute(0, 2, 3, 1)[..., :3]
+
+            render_pkg = self.render(
+                verts,
+                world_to_cam,
+                K,
+                render_width,
+                render_height,
+                light_pos=l_pos,
+                light_intensity=lint,
+                bg_img=background,
             )
 
-            pred_img = render_pkg["render"].permute(2, 0, 1).unsqueeze(0).contiguous()
+            pred_img = render_pkg["render"].permute(0, 3, 1, 2).contiguous()
+            if pred_img.isnan().any():
+                continue
+
+            pred_img = pred_img.clamp(0.0, 1.0)
+            gt_img = batch["image"].cuda()
+
             self.mae.update(pred_img, gt_img)
             self.psnr.update(pred_img, gt_img)
             self.ssim.update(pred_img, gt_img)
             self.lpips.update(pred_img, gt_img)
 
-        logger.info(
+            if idx % 50 == 0:
+                gt_imgs.append(gt_img[0].permute(1, 2, 0).cpu().numpy())
+                pred_imgs.append(pred_img[0].permute(1, 2, 0).cpu().numpy())
+
+            if idx > 250:
+                break
+
+        print(
             f"Step {step}: L1: {self.mae.compute()}, PSNR: {self.psnr.compute()}, SSIM: {self.ssim.compute()}, LPIPS: {self.lpips.compute()}"
         )
         if self.cfg.use_wandb:
+            gt_imgs = np.concatenate(gt_imgs, axis=1)
+            pred_imgs = np.concatenate(pred_imgs, axis=1)
+
             wandb.log(
                 {
                     "val/l1": self.mae.compute().item(),
                     "val/psnr": self.psnr.compute().item(),
                     "val/ssim": self.ssim.compute().item(),
                     "val/lpips": self.lpips.compute().item(),
+                    "image/gt": wandb.Image(gt_imgs, file_type="jpg"),
+                    "image/pred": wandb.Image(pred_imgs, file_type="jpg"),
                 },
                 step=step,
             )
@@ -367,11 +445,6 @@ class Runner:
                 [head_pose, torch.zeros_like(head_pose[:, :1, :])], dim=1
             )
             head_pose_4x4[:, 3, 3] = 1.0
-            # vertices = head_pose_4x4.squeeze(0).cuda() @ to_hvec(
-            #     batch["vertices"].cuda(), 1.0
-            # ).transpose(-1, -2)
-            # vertices = vertices.squeeze(0).transpose(-1, -2)[:, :3].contiguous()
-
             w2c = batch["world_to_cam"] @ head_pose_4x4
 
             world_to_cam = w2c
@@ -398,17 +471,6 @@ class Runner:
                 bg_img=background,
             )
 
-            # self.gaussians.update_mesh_properties(batch["vertices"].cuda().squeeze(0))
-
-            # # Render
-            # render_pkg = render_gsplat(
-            #     world_to_cam,
-            #     batch["K"].cuda(),
-            #     render_width,
-            #     render_height,
-            #     self.gaussians,
-            # )
-
             image, viewspace_point_tensor, visibility_filter, radii = (
                 render_pkg["render"],
                 render_pkg["viewspace_points"],
@@ -417,6 +479,10 @@ class Runner:
             )
             image = image.squeeze().permute(2, 0, 1)
             viewspace_point_tensor.retain_grad()
+
+            if image.isnan().any():
+                print("NaN in image", flush=True)
+                continue
 
             # Loss
             gt_img = batch["image"].cuda().squeeze(0)
@@ -461,18 +527,6 @@ class Runner:
             )
 
             loss = l1_loss + ssim_loss + xyz_loss + scale_loss
-            if iteration % 100 == 0:
-                save_image(image, self.log_media_dir / f"render_{iteration:06d}.png")
-                save_image(gt_img, self.log_media_dir / f"gt_{iteration:06d}.png")
-
-                kd = render_pkg["kd"].squeeze(0).permute(2, 0, 1)
-                ks = render_pkg["ks"].squeeze(0).permute(2, 0, 1)
-
-                print(f"kd: {kd.min().item()}, {kd.max().item()}")
-                print(f"ks: {ks.min().item()}, {ks.max().item()}")
-
-                save_image(kd, self.log_media_dir / f"kd_{iteration:06d}.png")
-                save_image(ks, self.log_media_dir / f"ks_{iteration:06d}.png")
             loss.backward()
 
             # Logging
@@ -487,6 +541,7 @@ class Runner:
                         "train/l1_loss": l1_loss.item(),
                         "train/ssim_loss": ssim_loss.item(),
                         "train/xyz_loss": xyz_loss.item(),
+                        "train/num_gs": self.gaussians.get_xyz.shape[0],
                     },
                     step=iteration,
                 )
@@ -530,8 +585,14 @@ class Runner:
             self.gaussians.optimizer.zero_grad(set_to_none=True)
 
             if iteration % self.cfg.eval_interval == 0:
-                # self.evaluate(iteration)
-                self.render_trajectory(iteration)
+                self.evaluate(iteration)
+                self.render_trajectory(
+                    K=K[0],
+                    step=iteration,
+                    width=render_width,
+                    height=render_height,
+                    num_frames=96,
+                )
 
         # Final evaluation
         self.evaluate(iteration)

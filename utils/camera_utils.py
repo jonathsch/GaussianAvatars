@@ -101,37 +101,62 @@ def camera_to_JSON(id, camera: Camera):
     return camera_entry
 
 
-def look_at(eye: np.ndarray, at: np.ndarray, up: np.ndarray, convention: Literal["openCV", "openGL"] = "openCV") -> np.ndarray:
+def look_at(
+    eye: np.ndarray,
+    at: np.ndarray,
+    up: np.ndarray,
+    convention: Literal["openCV", "openGL"] = "openCV",
+) -> np.ndarray:
     a = eye - at
     w = a / np.linalg.norm(a)
     u = np.cross(up, w)
     u = u / np.linalg.norm(u)
     v = np.cross(w, u)
-    translate = np.array([[1, 0, 0, eye[0]], 
-                              [0, 1, 0, eye[1]], 
-                              [0, 0, 1, eye[2]], 
-                              [0, 0, 0, 1]], dtype=eye.dtype)
-    rotate = np.array([[u[0], u[1], u[2], 0], 
-                           [v[0], v[1], v[2], 0], 
-                           [w[0], w[1], w[2], 0], 
-                           [0, 0, 0, 1]], dtype=eye.dtype)
+    translate = np.array(
+        [[1, 0, 0, eye[0]], [0, 1, 0, eye[1]], [0, 0, 1, eye[2]], [0, 0, 0, 1]],
+        dtype=eye.dtype,
+    )
+    rotate = np.array(
+        [
+            [u[0], u[1], u[2], 0],
+            [v[0], v[1], v[2], 0],
+            [w[0], w[1], w[2], 0],
+            [0, 0, 0, 1],
+        ],
+        dtype=eye.dtype,
+    )
     T = rotate @ translate
-    
+
     if convention == "openCV":
         T[:, [1, 2]] *= -1
-    
+
     return T
+
 
 def get_camera_trajectory(num_frames: int) -> np.ndarray:
     # Assume head is at origin facing towards z-axis
-    radius = 1.5
+    radius = 2.0
     x_path = np.sin(np.linspace(0.0, 2 * np.pi, num_frames)) * radius
     y_path = -np.cos(np.linspace(0.0, 2 * np.pi, num_frames))
-    z = radius
+    # z = 0.0
 
     camera_trajectory = []
     for x, y in zip(x_path, y_path):
-        T = look_at(np.array([x, y, z]), np.array([0.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0]))
+        T = look_at(
+            np.array([0.0, 0.0, -0.5]), np.array([0.0, 0.0, 1.0]), np.array([0.0, -1.0, 0.0])
+        )
         camera_trajectory.append(T)
-    
-    return np.stack(camera_trajectory, axis=0) # [num_frames, 4, 4]
+
+    return np.stack(camera_trajectory, axis=0)  # [num_frames, 4, 4]
+
+
+def get_light_path(num_frames: int) -> np.ndarray:
+    radius = 2.0
+    x_path = np.sin(np.linspace(0.0, 2 * np.pi, num_frames)) * radius
+    z_path = (
+        np.cos(np.linspace(0.0, 2 * np.pi, num_frames)) * radius - 1.0
+    )  # Set origin to (0, 0, 1)
+    y_path = np.zeros_like(x_path)
+
+    light_path = np.stack([x_path, y_path, z_path], axis=-1)  # [num_frames, 3]
+    return light_path

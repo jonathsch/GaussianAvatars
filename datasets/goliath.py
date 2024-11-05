@@ -138,7 +138,7 @@ class GoliathHeadDataset(torch.utils.data.Dataset):
 
         if segment:
             segment_df = pd.read_csv(self.root_path / "frame_segments_list.csv")
-            segment_frames = segment_df[segment_df.segment == segment].frame.tolist()
+            segment_frames = segment_df[segment_df.segment_name == segment].frame.tolist()
             frame_list = list(set(frame_list).intersection(segment_frames))
 
         if not (fully_lit_only or partially_lit_only or segment):
@@ -269,7 +269,7 @@ class GoliathHeadDataset(torch.utils.data.Dataset):
                     [[float(i) for i in row] for row in rows], dtype=np.float32
                 )
                 matrix[:3, 3] /= 1000.0  # NOTE: Convert to meters
-                return matrix
+                return torch.as_tensor(matrix, dtype=torch.float32)
 
     @lru_cache(maxsize=CACHE_LENGTH)
     def load_background(self, camera: str) -> torch.Tensor:
@@ -433,6 +433,15 @@ class GoliathHeadDataset(torch.utils.data.Dataset):
         radius = diagonal * 1.1
         translate = -avg_campos
         return {"translate": translate, "radius": radius}
+
+    def get_vertices_by_timestep(self, idx: int):
+        frame_id = self.frame_list[idx + 250]
+        vertices = self.load_registration_vertices(frame_id)
+        head_pose = self.load_head_pose(frame_id)
+        # print(vertices.min(dim=0).values, vertices.max(dim=0).values)
+        vertices = (head_pose[:3, :3] @ vertices.T).T + head_pose[:3, 3]
+        # print(vertices.min(dim=0).values, vertices.max(dim=0).values)
+        return vertices
 
     def __len__(self):
         return len(self.frame_list) * len(self.camera_ids)
